@@ -94,22 +94,64 @@ Useful flags (see the full list with `python -m comicgan.train --help`):
 | `--limit` | – | use only the first N images per domain |
 | `--steps-per-epoch` | auto | defaults to `min(#photo, #comic) // batch_size` |
 | `--no-cache` | – | don't cache images in RAM (the cache needs about 1.2 GB) |
-| `--sample-every` / `--save-every` | 4 / 5 | how often to save preview images / checkpoints |
+| `--sample-every` / `--save-every` | 4 / 5 | how often to save preview images / generator snapshots |
+| `--checkpoint-every` | 1 | how often to save the full training state (for resuming) |
+| `--resume` | off | continue from `outputs/state/` |
+| `--resume-from` | – | continue from another state folder |
 | `--model-dir` / `--output-dir` | `models/` / `outputs/` | where outputs are written |
 
 Training outputs:
 
-- `models/photo2comic.keras`, `models/comic2photo.keras`: final models used by the app
+- `models/photo2comic.keras`, `models/comic2photo.keras`: final models used by the app, written when training ends
 - `outputs/samples/epoch_XXX.png`: each row is photo | generated comic | comic | generated photo
-- `outputs/checkpoints/epoch_XXX/`: intermediate generators
+- `outputs/checkpoints/epoch_XXX/`: generator snapshots. Copy them into `models/` to try them in the app
+  before training finishes.
+- `outputs/state/`: full training state (both generators, both discriminators, optimizers and epoch
+  number). Only the latest one is kept, about 250 MB.
 - `outputs/history.csv`: loss per epoch
 
 **Time estimate:** in the original experiment, one epoch (618 steps) took about 60 s on a Kaggle TPU v3-8.
-On CPU it is much slower, so a free GPU on Kaggle or Colab is a good choice for the full training. Clone
-the repo there, `pip install -r requirements.txt`, run `python -m comicgan.train`, then download the
-two `.keras` files into `models/`.
+On CPU it is much slower, so a free GPU on Kaggle or Colab is a good choice for the full training.
 
 You can also run training from `modelling.ipynb`, which calls the same functions.
+
+### Resuming an interrupted run
+
+The full training state is saved after every epoch. If training stops, run the same command again with
+`--resume` to continue from the last finished epoch:
+
+```bash
+python -m comicgan.train --resume          # continues from outputs/state/
+python -m comicgan.train --resume-from path/to/outputs/state
+```
+
+Keep the other flags (batch size, image size, etc.) the same as in the original run. `--epochs` is the
+total number of epochs, not how many more to run. The epoch in progress when training stopped is lost
+and runs again.
+
+### Training on Kaggle
+
+```python
+%cd /kaggle/working
+!git clone https://github.com/farisznafis/real-to-comic-photo.git
+%cd /kaggle/working/real-to-comic-photo
+!pip install -r requirements.txt
+!python -m comicgan.train
+```
+
+- Use `%cd` (magic), not `!cd`. `!cd` only applies to its own line.
+- Turn on a GPU under *Settings → Accelerator*.
+- **Interactive sessions lose `/kaggle/working` when they stop or time out.** For a long run, use
+  *Save Version → Save & Run All (Commit)*. It runs in the background without the browser open, and
+  everything in `/kaggle/working` is kept as the version's output.
+- To continue a run in a new session, add the previous version's output as an input
+  (*Add Input → Your Work → Notebooks*). Then pass that folder's state directory:
+  ```python
+  !python -m comicgan.train --resume-from /kaggle/input/<notebook-name>/real-to-comic-photo/outputs/state
+  ```
+  The exact path depends on the notebook name. Check it in the *Input* panel.
+- When training is done, download `models/photo2comic.keras` and `models/comic2photo.keras` from the
+  *Output* panel into `models/` on your machine.
 
 ## Running the app
 

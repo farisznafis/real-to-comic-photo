@@ -3,6 +3,7 @@
 Usage:
     python -m comicgan.train --epochs 50
     python -m comicgan.train --epochs 1 --limit 64 --batch-size 4   # quick smoke run
+    python -m comicgan.train --resume                               # continue an interrupted run
 """
 
 from __future__ import annotations
@@ -73,16 +74,56 @@ class GeneratorExporter(keras.callbacks.Callback):
         print(f"Saved generators to {self.model_dir.resolve()}")
 
 
+class TrainingState(keras.callbacks.Callback):
+    """Checkpoint everything needed to resume: all four networks, optimizers and the epoch."""
+
+    def __init__(self, model: CycleGAN, directory: Path, every: int):
+        super().__init__()
+        self.checkpoint = tf.train.Checkpoint(
+            epoch=tf.Variable(0, dtype=tf.int64),
+            photo2comic=model.photo2comic,
+            comic2photo=model.comic2photo,
+            comic_disc=model.comic_disc,
+            photo_disc=model.photo_disc,
+            p2c_optimizer=model.p2c_optimizer,
+            c2p_optimizer=model.c2p_optimizer,
+            comic_disc_optimizer=model.comic_disc_optimizer,
+            photo_disc_optimizer=model.photo_disc_optimizer,
+        )
+        # Only the latest state is kept; it is ~250 MB with the default model size.
+        self.manager = tf.train.CheckpointManager(self.checkpoint, str(directory), max_to_keep=1)
+        self.every = max(1, every)
+
+    def restore(self, source: Path | None = None) -> int | None:
+        """Load the latest state from `source` (default: own directory).
+
+        Returns the number of completed epochs, or None if no state was found.
+        """
+        path = tf.train.latest_checkpoint(str(source)) if source else self.manager.latest_checkpoint
+        if path is None:
+            return None
+        self.checkpoint.restore(path).assert_existing_objects_matched()
+        print(f"Resumed from {path}")
+        return int(self.checkpoint.epoch)
+
+    def on_epoch_end(self, epoch, logs=None):
+        self.checkpoint.epoch.assign(epoch + 1)
+        if (epoch + 1) % self.every == 0 or epoch + 1 == self.params.get("epochs"):
+            self.manager.save(checkpoint_number=epoch + 1)
+
+
 class HistoryCSV(keras.callbacks.Callback):
     """Append each epoch's losses to a CSV file (one row per epoch)."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, append: bool = False):
         super().__init__()
         self.path = Path(path)
+        self.append = append
 
     def on_train_begin(self, logs=None):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.unlink(missing_ok=True)
+        if not self.append:
+            self.path.unlink(missing_ok=True)
 
     def on_epoch_end(self, epoch, logs=None):
         logs = logs or {}
@@ -147,18 +188,43 @@ def train(cfg: TrainConfig) -> keras.callbacks.History:
     sample_batch = next(iter(test_ds))
 
     model = build_cyclegan(cfg)
+    state = TrainingState(model, cfg.state_dir, cfg.checkpoint_every)
+    initial_epoch = _restore_state(state, cfg)
+
     callbacks = [
+        state,
         SampleSaver(sample_batch, cfg.output_dir / "samples", cfg.sample_every),
         GeneratorExporter(cfg.output_dir / "checkpoints", cfg.model_dir, cfg.save_every),
-        HistoryCSV(cfg.output_dir / "history.csv"),
+        HistoryCSV(cfg.output_dir / "history.csv", append=initial_epoch > 0),
     ]
     return model.fit(
         train_ds,
         epochs=cfg.epochs,
+        initial_epoch=initial_epoch,
         steps_per_epoch=steps,
         callbacks=callbacks,
         shuffle=False,  # the tf.data pipeline already shuffles
     )
+
+
+def _restore_state(state: TrainingState, cfg: TrainConfig) -> int:
+    """Return the epoch to start from (0 for a fresh run)."""
+    if cfg.resume_from:
+        epoch = state.restore(cfg.resume_from)
+        if epoch is None:
+            raise FileNotFoundError(f"No training state found in {cfg.resume_from}")
+    elif cfg.resume:
+        epoch = state.restore()
+        if epoch is None:
+            print(f"No training state in {cfg.state_dir}; starting from scratch.")
+            return 0
+    else:
+        return 0
+    if epoch >= cfg.epochs:
+        print(f"State is already at epoch {epoch} (>= --epochs {cfg.epochs}); exporting only.")
+    else:
+        print(f"Continuing from epoch {epoch + 1}/{cfg.epochs}")
+    return epoch
 
 
 def parse_args(argv: list[str] | None = None) -> TrainConfig:
@@ -172,7 +238,7 @@ def parse_args(argv: list[str] | None = None) -> TrainConfig:
         elif isinstance(default, Path):
             parser.add_argument(flag, type=Path, default=default)
         elif default is None:
-            parser.add_argument(flag, type=int, default=None)
+            parser.add_argument(flag, type=f.metadata.get("type", int), default=None)
         else:
             parser.add_argument(flag, type=type(default), default=default)
     return TrainConfig(**vars(parser.parse_args(argv)))

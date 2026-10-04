@@ -1,20 +1,8 @@
 import numpy as np
 import pytest
-from PIL import Image
 
 from comicgan.config import COMIC_SUBDIR, PHOTO_SUBDIR, TrainConfig
 from comicgan.data import list_domain_files, make_dataset, split_paths
-
-
-@pytest.fixture
-def data_dir(tmp_path):
-    rng = np.random.default_rng(0)
-    for subdir in (PHOTO_SUBDIR, COMIC_SUBDIR):
-        (tmp_path / subdir).mkdir()
-        for i in range(6):
-            pixels = rng.integers(0, 256, (80, 80, 3), dtype=np.uint8)
-            Image.fromarray(pixels).save(tmp_path / subdir / f"{i}.jpg")
-    return tmp_path
 
 
 def test_list_domain_files(data_dir):

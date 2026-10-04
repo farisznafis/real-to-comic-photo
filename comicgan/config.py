@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -57,11 +57,24 @@ class TrainConfig:
     sample_every: int = 4
     save_every: int = 5
 
+    # Full training state (all four networks + optimizers) goes to `output_dir/state`
+    # every `checkpoint_every` epochs. `resume` continues from there; `resume_from`
+    # continues from another state folder (e.g. a previous Kaggle run's output).
+    checkpoint_every: int = 1
+    resume: bool = False
+    resume_from: Path | None = field(default=None, metadata={"type": Path})
+
     def __post_init__(self) -> None:
         self.data_dir = Path(self.data_dir)
         self.model_dir = Path(self.model_dir)
         self.output_dir = Path(self.output_dir)
+        if self.resume_from is not None:
+            self.resume_from = Path(self.resume_from)
         if self.load_size < self.image_size:
             raise ValueError("load_size must be >= image_size")
         if self.image_size % 4 != 0:
             raise ValueError("image_size must be a multiple of 4")
+
+    @property
+    def state_dir(self) -> Path:
+        return self.output_dir / "state"
