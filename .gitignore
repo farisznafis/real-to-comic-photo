@@ -12,7 +12,7 @@ venv/
 
 # Training artifacts
 outputs/
-models/*
+# models/*
 !models/.gitkeep
 
 # Editors / OS
